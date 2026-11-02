@@ -9,6 +9,10 @@ on:
       addresses:
         description: slid addresses, one per line (hex)
         required: true
+      disass_vaddrs:
+        description: unslid virtual addresses to disassemble, comma separated
+        required: false
+        default: ''
 permissions:
   contents: write
 jobs:
@@ -50,6 +54,19 @@ jobs:
           done <<< "$ADDRESSES"
           echo "--- tail ---"
           tail -120 out/symbols.txt
+      - name: disassemble
+        if: ${{ inputs.disass_vaddrs != '' }}
+        env:
+          DISASS: ${{ inputs.disass_vaddrs }}
+        run: |
+          set -euo pipefail
+          DSC=
+          : > out/disass.txt
+          for a in ; do
+            echo "== $a" >> out/disass.txt
+            ipsw dyld disass --vaddr "$a" --quiet "$DSC" >> out/disass.txt 2>&1 || true
+          done
+          tail -200 out/disass.txt
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,4 +75,5 @@ jobs:
           TAG=symbols
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "symbolication output" --notes "ipsw dyld a2s output for a stack dump" 
           gh release upload "$TAG" out/symbols.txt --clobber
+          [ -f out/disass.txt ] && gh release upload "$TAG" out/disass.txt --clobber || true
           echo "PUBLIC: https://github.com/${{ github.repository }}/releases/download/$TAG/symbols.txt"
