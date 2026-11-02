@@ -1,6 +1,6 @@
 name: symbolicate-stacks
 # Look up dyld shared cache symbols for slid addresses from PANDORA STACKS / crash dumps,
-# and optionally disassemble given unslid virtual addresses.
+# and optionally disassemble given unslid virtual addresses (printing context around each).
 on:
   workflow_dispatch:
     inputs:
@@ -68,15 +68,23 @@ jobs:
             echo "== $a" >> out/disass.txt
             ipsw dyld disass --vaddr "$a" --quiet "$DSC" >> out/disass.txt 2>&1 || true
           done
-          echo "--- disass tail ---"
-          tail -200 out/disass.txt
+          : > out/context.txt
+          for a in $(echo "$DISASS" | tr ',' ' '); do
+            echo "===== before $a" >> out/context.txt
+            grep -B 30 "^$a:" out/disass.txt >> out/context.txt 2>&1 || true
+            echo "===== at/after $a" >> out/context.txt
+            grep -A 80 "^$a:" out/disass.txt >> out/context.txt 2>&1 || true
+          done
+          cat out/context.txt
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           TAG=symbols
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "symbolication output" --notes "ipsw dyld output for stack dumps"
-          gh release upload "$TAG" out/symbols.txt --clobber
-          if [ -f out/disass.txt ]; then gh release upload "$TAG" out/disass.txt --clobber; fi
-          echo "PUBLIC: https://github.com/${{ github.repository }}/releases/download/$TAG/"
+          gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 || gh release create "$TAG" -R "$REPO" --title "symbolication output" --notes "ipsw dyld output for stack dumps"
+          gh release upload "$TAG" out/symbols.txt -R "$REPO" --clobber
+          if [ -f out/disass.txt ]; then gh release upload "$TAG" out/disass.txt -R "$REPO" --clobber; fi
+          if [ -f out/context.txt ]; then gh release upload "$TAG" out/context.txt -R "$REPO" --clobber; fi
+          echo "PUBLIC: https://github.com/$REPO/releases/download/$TAG/"
