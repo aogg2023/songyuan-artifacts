@@ -1,5 +1,6 @@
 name: symbolicate-stacks
-# Look up the dyld shared cache symbols for a list of slid addresses from PANDORA STACKS dumps.
+# Look up dyld shared cache symbols for slid addresses from PANDORA STACKS / crash dumps,
+# and optionally disassemble given unslid virtual addresses.
 on:
   workflow_dispatch:
     inputs:
@@ -10,9 +11,9 @@ on:
         description: slid addresses, one per line (hex)
         required: true
       disass_vaddrs:
-        description: unslid virtual addresses to disassemble, comma separated
+        description: unslid virtual addresses to disassemble, comma separated (optional)
         required: false
-        default: ''
+        default: ""
 permissions:
   contents: write
 jobs:
@@ -22,7 +23,8 @@ jobs:
     steps:
       - name: tooling
         run: |
-          brew install blacktop/tap/ipsw
+          brew install blacktop/tap/ipsw || brew install ipsw || true
+          ipsw version
       - name: IPSW
         env:
           VERSION: "16.7.16"
@@ -37,7 +39,7 @@ jobs:
           set -euo pipefail
           IPSW=$(ls ipsw/*.ipsw | head -1)
           ipsw extract --dyld --device iPhone10,3 --dyld-arch arm64 -o dsc "$IPSW"
-          ls -lh dsc
+          find dsc -maxdepth 2 -type f -name 'dyld_shared_cache_arm64*' | head -5
       - name: symbols
         env:
           SLIDE: ${{ inputs.slide }}
@@ -60,12 +62,13 @@ jobs:
           DISASS: ${{ inputs.disass_vaddrs }}
         run: |
           set -euo pipefail
-          DSC=
+          DSC=$(find dsc -maxdepth 2 -type f -name dyld_shared_cache_arm64 | head -1)
           : > out/disass.txt
-          for a in ; do
+          for a in $(echo "$DISASS" | tr ',' ' '); do
             echo "== $a" >> out/disass.txt
             ipsw dyld disass --vaddr "$a" --quiet "$DSC" >> out/disass.txt 2>&1 || true
           done
+          echo "--- disass tail ---"
           tail -200 out/disass.txt
       - name: publish
         env:
@@ -73,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG=symbols
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "symbolication output" --notes "ipsw dyld a2s output for a stack dump" 
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "symbolication output" --notes "ipsw dyld output for stack dumps"
           gh release upload "$TAG" out/symbols.txt --clobber
-          [ -f out/disass.txt ] && gh release upload "$TAG" out/disass.txt --clobber || true
-          echo "PUBLIC: https://github.com/${{ github.repository }}/releases/download/$TAG/symbols.txt"
+          if [ -f out/disass.txt ]; then gh release upload "$TAG" out/disass.txt --clobber; fi
+          echo "PUBLIC: https://github.com/${{ github.repository }}/releases/download/$TAG/"
