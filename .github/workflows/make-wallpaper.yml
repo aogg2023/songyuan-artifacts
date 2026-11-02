@@ -1,0 +1,95 @@
+name: make-wallpaper
+# Build the PNG overlay of the iOS 16 default wallpaper (the HEIC layers cannot be decoded without
+# the hardware HEVC decoder, which makes PosterBoard crash). Runs on a public repo so the macOS
+# runner minutes are free; the zip is published as a release asset.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: iOS version of the IPSW
+        default: "16.7.16"
+      device:
+        description: device identifier
+        default: "iPhone10,3"
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: download the IPSW
+        env:
+          DEVICE: ${{ inputs.device }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          URL=$(curl -s "https://api.ipsw.me/v4/device/${DEVICE}?type=ipsw" | jq -r --arg V "$VERSION" '.firmwares[] | select(.version==$V) | .url' | head -1)
+          echo "IPSW $URL"
+          test -n "$URL"
+          curl -L --retry 3 -o ipsw.zip "$URL"
+          ls -l ipsw.zip
+          unzip -o -q ipsw.zip -d ipsw
+          ls ipsw | head -20
+      - name: find the System volume and convert the wallpaper to PNG
+        run: |
+          set -euo pipefail
+          SYSROOT=""
+          for d in ipsw/*.dmg; do
+            M=$(mktemp -d)
+            if hdiutil attach -nobrowse -readonly -mountpoint "$M" "$d" >/dev/null 2>&1; then
+              if [ -d "$M/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection" ]; then
+                echo "System volume: $d"
+                SYSROOT="$M"
+                break
+              fi
+              hdiutil detach "$M" >/dev/null 2>&1 || true
+            fi
+          done
+          test -n "$SYSROOT" || { echo "no System volume with the wallpaper collection"; ls ipsw; exit 1; }
+          mkdir -p out
+          python3 - "$SYSROOT" out <<'PY'
+          import os, subprocess, sys
+          sysroot, outdir = sys.argv[1], sys.argv[2]
+          WALL = ('/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/'
+                  '7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/')
+          src = os.path.join(sysroot, WALL.lstrip('/'))
+          assert os.path.isdir(src), src
+          lines, n = [], 0
+          for layer in sorted(p for p in os.listdir(src) if p.endswith('.ca')):
+              ldir = os.path.join(src, layer)
+              caml_path = os.path.join(ldir, 'main.caml')
+              caml = open(caml_path, 'rb').read().decode('utf-8')
+              for heic in sorted(p for p in os.listdir(os.path.join(ldir, 'assets')) if p.endswith('.HEIC') or p.endswith('.heic')):
+                  stem = heic.rsplit('.', 1)[0]
+                  png = os.path.join(outdir, f'w{n}_{stem.replace(" ", "_")}.png')
+                  subprocess.run(['sips', '-Z', '2400', '-s', 'format', 'png',
+                                  os.path.join(ldir, 'assets', heic), '--out', png],
+                                 check=True, stdout=subprocess.DEVNULL)
+                  quoted = stem.replace(' ', '%20')
+                  caml = caml.replace(f'src="assets/{quoted}.HEIC"', f'src="assets/{quoted}.png"')
+                  caml = caml.replace(f'src="assets/{stem}.HEIC"', f'src="assets/{stem}.png"')
+                  lines.append(f'{os.path.basename(png)} 0644 {WALL}{layer}/assets/{stem}.png')
+              assert '.HEIC"/>' not in caml, layer
+              name = f'w{n}_main.caml'
+              open(os.path.join(outdir, name), 'w').write(caml)
+              lines.append(f'{name} 0644 {WALL}{layer}/main.caml')
+              n += 1
+          open(os.path.join(outdir, 'files.txt'), 'w').write('\n'.join(lines) + '\n')
+          print('wallpaper files:', len(lines))
+          PY
+          du -sh out; ls out | head
+      - name: publish the overlay
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          (cd out && zip -q -r ../wallpaper-overlay.zip .)
+          shasum -a 256 wallpaper-overlay.zip
+          TAG="wallpaper-overlay-${VERSION}"
+          gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "wallpaper PNG overlay $VERSION" \
+            --notes "PNG replacement of the iOS $VERSION default wallpaper HEIC layers (files.txt for the pandora file installer)."
+          gh release upload "$TAG" wallpaper-overlay.zip -R "$GITHUB_REPOSITORY"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[] | "\(.name) \(.size)"'
