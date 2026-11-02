@@ -1,17 +1,25 @@
 name: symbolicate-stacks
-# Look up dyld shared cache symbols for slid addresses from PANDORA STACKS / crash dumps,
-# and optionally disassemble given unslid virtual addresses (printing context around each).
+# Look up dyld shared cache symbols for addresses, disassemble functions, dump data,
+# and resolve stub islands. Used to dig into PANDORA crash dumps.
 on:
   workflow_dispatch:
     inputs:
       slide:
-        description: process slide (hex, e.g. 0x17220000)
+        description: process slide (hex, e.g. 0x17220000). Use 0x0 for unslid addresses.
         required: true
       addresses:
-        description: slid addresses, one per line (hex)
+        description: addresses (hex, comma separated) for a2s
         required: true
       disass_vaddrs:
-        description: unslid virtual addresses to disassemble, comma separated (optional)
+        description: virtual addresses to disassemble (comma separated, optional)
+        required: false
+        default: ""
+      dump_vaddrs:
+        description: virtual addresses to dump as bytes/strings (comma separated, optional)
+        required: false
+        default: ""
+      stubs_grep:
+        description: regex used to filter the stub island dump (optional)
         required: false
         default: ""
 permissions:
@@ -49,13 +57,15 @@ jobs:
           DSC=$(find dsc -maxdepth 2 -type f -name dyld_shared_cache_arm64 | head -1)
           echo "cache: $DSC"
           : > out/symbols.txt
-          while read -r a; do
+          IFS=',' read -ra ADDRS <<< "$ADDRESSES"
+          for a in "${ADDRS[@]}"; do
+            a=$(echo "$a" | tr -d ' ')
             [ -z "$a" ] && continue
             echo "== $a" >> out/symbols.txt
             ipsw dyld a2s --slide "$SLIDE" -i "$DSC" "$a" >> out/symbols.txt 2>&1 || true
-          done <<< "$ADDRESSES"
+          done
           echo "--- tail ---"
-          tail -120 out/symbols.txt
+          tail -160 out/symbols.txt
       - name: disassemble
         if: ${{ inputs.disass_vaddrs != '' }}
         env:
@@ -64,18 +74,48 @@ jobs:
           set -euo pipefail
           DSC=$(find dsc -maxdepth 2 -type f -name dyld_shared_cache_arm64 | head -1)
           : > out/disass.txt
-          for a in $(echo "$DISASS" | tr ',' ' '); do
-            echo "== $a" >> out/disass.txt
+          IFS=',' read -ra ADDRS <<< "$DISASS"
+          for a in "${ADDRS[@]}"; do
+            a=$(echo "$a" | tr -d ' ')
+            [ -z "$a" ] && continue
+            echo "===== $a" >> out/disass.txt
             ipsw dyld disass --vaddr "$a" --quiet "$DSC" >> out/disass.txt 2>&1 || true
           done
           : > out/context.txt
-          for a in $(echo "$DISASS" | tr ',' ' '); do
-            echo "===== before $a" >> out/context.txt
-            grep -B 30 "^$a:" out/disass.txt >> out/context.txt 2>&1 || true
-            echo "===== at/after $a" >> out/context.txt
-            grep -A 80 "^$a:" out/disass.txt >> out/context.txt 2>&1 || true
+          for a in "${ADDRS[@]}"; do
+            a=$(echo "$a" | tr -d ' ')
+            key=${a#0x}
+            echo "===== context $a" >> out/context.txt
+            grep -B 25 -A 60 -i "$key" out/disass.txt >> out/context.txt 2>&1 || true
           done
           cat out/context.txt
+      - name: dump data
+        if: ${{ inputs.dump_vaddrs != '' }}
+        env:
+          DUMPS: ${{ inputs.dump_vaddrs }}
+        run: |
+          set -euo pipefail
+          DSC=$(find dsc -maxdepth 2 -type f -name dyld_shared_cache_arm64 | head -1)
+          : > out/dump.txt
+          IFS=',' read -ra ADDRS <<< "$DUMPS"
+          for a in "${ADDRS[@]}"; do
+            a=$(echo "$a" | tr -d ' ')
+            [ -z "$a" ] && continue
+            echo "===== dump $a" >> out/dump.txt
+            ipsw dyld dump "$DSC" "$a" -s 192 >> out/dump.txt 2>&1 || true
+          done
+          cat out/dump.txt
+      - name: stub islands
+        if: ${{ inputs.stubs_grep != '' }}
+        env:
+          PAT: ${{ inputs.stubs_grep }}
+        run: |
+          set -euo pipefail
+          DSC=$(find dsc -maxdepth 2 -type f -name dyld_shared_cache_arm64 | head -1)
+          ipsw dyld stubs "$DSC" > out/stubs.txt 2>&1 || true
+          wc -l out/stubs.txt
+          grep -i -E "$PAT" out/stubs.txt > out/stubs_match.txt 2>&1 || true
+          cat out/stubs_match.txt
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,7 +124,7 @@ jobs:
           set -euo pipefail
           TAG=symbols
           gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 || gh release create "$TAG" -R "$REPO" --title "symbolication output" --notes "ipsw dyld output for stack dumps"
-          gh release upload "$TAG" out/symbols.txt -R "$REPO" --clobber
-          if [ -f out/disass.txt ]; then gh release upload "$TAG" out/disass.txt -R "$REPO" --clobber; fi
-          if [ -f out/context.txt ]; then gh release upload "$TAG" out/context.txt -R "$REPO" --clobber; fi
+          for f in out/*.txt; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" -R "$REPO" --clobber || true
+          done
           echo "PUBLIC: https://github.com/$REPO/releases/download/$TAG/"
