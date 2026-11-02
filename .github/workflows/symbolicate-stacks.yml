@@ -40,7 +40,7 @@ jobs:
           ADDRESSES: ${{ inputs.addresses }}
         run: |
           set -euo pipefail
-          DSC=$(ls dsc/dyld_shared_cache_arm64* | head -1)
+          DSC=$(find dsc -maxdepth 2 -type f -name dyld_shared_cache_arm64 | head -1)
           echo "cache: $DSC"
           : > out/symbols.txt
           while read -r a; do
