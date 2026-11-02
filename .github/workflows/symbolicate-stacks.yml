@@ -1,0 +1,61 @@
+name: symbolicate-stacks
+# Look up the dyld shared cache symbols for a list of slid addresses from PANDORA STACKS dumps.
+on:
+  workflow_dispatch:
+    inputs:
+      slide:
+        description: process slide (hex, e.g. 0x17220000)
+        required: true
+      addresses:
+        description: slid addresses, one per line (hex)
+        required: true
+permissions:
+  contents: write
+jobs:
+  symbols:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: tooling
+        run: |
+          brew install blacktop/tap/ipsw
+      - name: IPSW
+        env:
+          VERSION: "16.7.16"
+          DEVICE: "iPhone10,3"
+        run: |
+          set -euo pipefail
+          mkdir -p ipsw dsc out
+          ipsw download ipsw --device "$DEVICE" --version "$VERSION" -o ipsw
+          ls -lh ipsw
+      - name: dyld shared cache
+        run: |
+          set -euo pipefail
+          IPSW=$(ls ipsw/*.ipsw | head -1)
+          ipsw extract --dyld --device iPhone10,3 --dyld-arch arm64 -o dsc "$IPSW"
+          ls -lh dsc
+      - name: symbols
+        env:
+          SLIDE: ${{ inputs.slide }}
+          ADDRESSES: ${{ inputs.addresses }}
+        run: |
+          set -euo pipefail
+          DSC=$(ls dsc/dyld_shared_cache_arm64* | head -1)
+          echo "cache: $DSC"
+          : > out/symbols.txt
+          while read -r a; do
+            [ -z "$a" ] && continue
+            echo "== $a" >> out/symbols.txt
+            ipsw dyld a2s --slide "$SLIDE" -i "$DSC" "$a" >> out/symbols.txt 2>&1 || true
+          done <<< "$ADDRESSES"
+          echo "--- tail ---"
+          tail -120 out/symbols.txt
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=symbols
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "symbolication output" --notes "ipsw dyld a2s output for a stack dump" 
+          gh release upload "$TAG" out/symbols.txt --clobber
+          echo "PUBLIC: https://github.com/${{ github.repository }}/releases/download/$TAG/symbols.txt"
