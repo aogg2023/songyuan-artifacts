@@ -76,6 +76,15 @@ jobs:
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
 
+      - name: Verify patches landed
+        if: always()
+        run: |
+          echo "source kpi_vfs.c sweetdataprotect: $(grep -c sweetdataprotect dxb/xnu/bsd/vfs/kpi_vfs.c || true)"
+          echo "source hfs_vnops.c pandora_dp_none: $(grep -c pandora_dp_none dxb/xnu/bsd/sweet_hfs/core/hfs_vnops.c || true)"
+          K=out/kernel.development.pandora
+          echo "kernel sweetdataprotect: $(strings "$K" | grep -c sweetdataprotect || true)"
+          echo "kernel pandora_dumpnewest: $(strings "$K" | grep -c pandora_dumpnewest || true)"
+          echo "kernel 0335 marker com.pandora.dataprotect-class: $(strings "$K" | grep -c com.pandora.dataprotect-class || true)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
