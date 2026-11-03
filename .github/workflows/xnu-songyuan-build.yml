@@ -85,6 +85,9 @@ jobs:
           echo "kernel sweetdataprotect: $(strings "$K" | grep -c sweetdataprotect || true)"
           echo "kernel pandora_dumpnewest: $(strings "$K" | grep -c pandora_dumpnewest || true)"
           echo "kernel 0335 marker com.pandora.dataprotect-class: $(strings "$K" | grep -c com.pandora.dataprotect-class || true)"
+          echo "kernel 0336 marker PANDORA POSTER RESET: $(strings "$K" | grep -c "PANDORA POSTER RESET" || true)"
+          echo "kernel 0336 boot-arg pandora_poster_reset: $(strings "$K" | grep -c pandora_poster_reset || true)"
+          echo "kernel 0337 marker PANDORA DPT: $(strings "$K" | grep -c "PANDORA DPT" || true)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
