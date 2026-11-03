@@ -88,6 +88,7 @@ jobs:
           echo "kernel 0336 marker PANDORA POSTER RESET: $(strings "$K" | grep -c "PANDORA POSTER RESET" || true)"
           echo "kernel 0336 boot-arg pandora_poster_reset: $(strings "$K" | grep -c pandora_poster_reset || true)"
           echo "kernel 0337 marker PANDORA DPT: $(strings "$K" | grep -c "PANDORA DPT" || true)"
+          echo "kernel 0338 marker PANDORA FILES mode: $(strings "$K" | grep -c "PANDORA FILES: mode" || true)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
