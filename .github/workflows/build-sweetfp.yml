@@ -1,0 +1,79 @@
+name: build-sweetfp
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version || true
+          xcrun --sdk iphoneos --show-sdk-version || true
+
+      - name: Build sweetfp.dylib (arm64e)
+        working-directory: tools/sweetfp
+        run: |
+          set -eux
+          xcrun -sdk iphoneos clang -arch arm64e -mios-version-min=16.0 -O2 -fobjc-arc \
+            -dynamiclib -install_name /usr/local/lib/sweetfp.dylib \
+            -framework Foundation sweetfp.m -o sweetfp.dylib
+          codesign -s - -f sweetfp.dylib
+          python3 -I pacstrip.py --sign sweetfp.dylib
+          ls -l sweetfp.dylib
+          shasum -a 256 sweetfp.dylib
+
+      - name: Patch PosterBoard (LC_LOAD_DYLIB + re-sign)
+        working-directory: tools/sweetfp
+        run: |
+          set -eux
+          cp PosterBoard PosterBoard.orig
+          codesign -d --entitlements :- PosterBoard.orig > ents.plist 2>ents.log || true
+          codesign -d --verbose=2 PosterBoard.orig 2>&1 | tee sign.log || true
+
+          python3 -I addlc.py PosterBoard.orig /usr/local/lib/sweetfp.dylib PosterBoard.patched
+
+          if [ -s ents.plist ]; then
+            codesign -f -s - --entitlements ents.plist PosterBoard.patched
+          else
+            codesign -f -s - PosterBoard.patched
+          fi
+          python3 -I pacstrip.py --sign PosterBoard.patched
+
+          python3 - <<'PY'
+          d = open('PosterBoard.patched', 'rb').read()
+          assert b'/usr/local/lib/sweetfp.dylib' in d, 'LC_LOAD_DYLIB missing'
+          print('OK: LC_LOAD_DYLIB present, size', len(d))
+          PY
+
+          codesign -d --entitlements :- PosterBoard.patched > ents2.plist 2>/dev/null || true
+          python3 - <<'PY'
+          import plistlib, os
+          def load(p):
+              if not os.path.exists(p) or os.path.getsize(p) == 0:
+                  return None
+              with open(p, 'rb') as f:
+                  return plistlib.load(f)
+          a, b = load('ents.plist'), load('ents2.plist')
+          if a is not None:
+              assert a == b, 'entitlements changed by re-sign'
+              print('OK: entitlements unchanged, count', len(a))
+          else:
+              print('NOTE: original had no readable entitlements')
+          PY
+
+          ls -l PosterBoard.patched
+          shasum -a 256 PosterBoard.patched
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sweetfp-artifacts
+          path: |
+            tools/sweetfp/sweetfp.dylib
+            tools/sweetfp/PosterBoard.patched
