@@ -34,6 +34,11 @@ jobs:
           ref: main
           path: src
 
+      - name: Prefer the BearSSL mirror (bearssl.org returns 502 intermittently)
+        run: |
+          git config --global url."https://github.com/AmanoTeam/BearSSL".insteadOf "https://www.bearssl.org/git/BearSSL"
+          git config --global --get-regexp '^url\.' || true
+
       - name: Adapt the patches to songyuan
         run: |
           cp -R src/xnu src/songyuan .
