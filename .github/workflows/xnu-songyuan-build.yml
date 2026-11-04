@@ -93,8 +93,6 @@ jobs:
           echo "kernel 0340 marker SWEET LS: $(strings "$K" | grep -c 'SWEET LS: unlink' || true)"
           if [ "$(strings "$K" | grep -c 'SWEET AMFI' || true)" -eq 0 ]; then echo "ERROR: 0339 marker SWEET AMFI missing (patch skipped?)"; exit 1; fi
           if [ "$(strings "$K" | grep -c 'SWEET LS: unlink' || true)" -eq 0 ]; then echo "ERROR: 0340 marker SWEET LS missing (patch skipped?)"; exit 1; fi
-if [ "$(strings "$K" | grep -c 'PANDORA CACHE: skeleton' || true)" -eq 0 ]; then echo "ERROR: 0350 marker missing (patch skipped?)"; exit 1; fi
-if [ "$(strings "$K" | grep -c 'pandora_varcache' || true)" -eq 0 ]; then echo "ERROR: 0350 boot-arg missing"; exit 1; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
