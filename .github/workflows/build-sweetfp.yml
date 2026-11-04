@@ -17,15 +17,18 @@ jobs:
           xcodebuild -version || true
           xcrun --sdk iphoneos --show-sdk-version || true
 
-      - name: Build sweetfp.dylib (arm64e)
+      - name: Build sweetfp.dylib (arm64)
         working-directory: tools/sweetfp
         run: |
           set -eux
-          xcrun -sdk iphoneos clang -arch arm64e -mios-version-min=16.0 -O2 -fobjc-arc \
+          # arm64, not arm64e: iPhone10,3 is A11 (no pointer authentication) and
+          # /Applications/PosterBoard.app/PosterBoard is an arm64 slice. An arm64e
+          # dylib is refused by dyld: "incompatible architecture (have 'arm64e', need 'arm64')".
+          xcrun -sdk iphoneos clang -arch arm64 -mios-version-min=16.0 -O2 -fobjc-arc \
             -dynamiclib -install_name /usr/local/lib/sweetfp.dylib \
             -framework Foundation sweetfp.m -o sweetfp.dylib
           codesign -s - -f sweetfp.dylib
-          python3 -I pacstrip.py --sign sweetfp.dylib
+          # no pacstrip: there is no pointer authentication to strip on arm64
           ls -l sweetfp.dylib
           shasum -a 256 sweetfp.dylib
 
