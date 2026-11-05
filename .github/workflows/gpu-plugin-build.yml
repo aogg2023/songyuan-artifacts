@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: "Check out data-a-live (upstream; the fork does not carry tools/metal/m2v)"
         run: |
-          git clone -q --depth 1 https://github.com/ShueiTsuki/data-a-live.git src
+          git clone -q --depth 1 https://github.com/aogg2023/data-a-live.git src
           ls src/tools/metal/m2v | head
 
       - name: Deps
@@ -85,7 +85,7 @@ jobs:
           fetch NativeMobileDisplay https://github.com/UniXNU/NativeMobileDisplay.git "$NATIVEMOBILEDISPLAY_SHA"
           for p in tools/metal/m2v/[0-9][0-9][0-9][0-9]-*.patch; do
             echo "   m2v/$(basename "$p")"
-            git -C metal2vulkan apply --whitespace=nowarn "$p"
+            git -C metal2vulkan apply --whitespace=nowarn "$PWD/$p"
           done
           bash tools/metal/build_plugin.sh unixnu nativemetal nativeadreno metal2vulkan mesa out/metal
 
