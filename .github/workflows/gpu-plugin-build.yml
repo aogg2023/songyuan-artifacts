@@ -20,12 +20,10 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 150
     steps:
-      - name: Check out the patch set
-        uses: actions/checkout@v4
-        with:
-          repository: aogg2023/data-a-live
-          ref: main
-          path: src
+      - name: Check out data-a-live (upstream, public: the fork does not carry tools/metal/m2v)
+        run: |
+          git clone -q --depth 1 https://github.com/ShueiTsuki/data-a-live.git src
+          ls src/tools/metal/m2v | head
 
       - name: Deps
         working-directory: src
