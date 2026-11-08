@@ -75,15 +75,19 @@ jobs:
           if [ -d "$KDK_ROOT" ]; then echo "KDK already present"; exit 0; fi
           URL=$(curl -fsSL --retry 5 "https://raw.githubusercontent.com/dortania/KdkSupportPkg/gh-pages/manifest.json" | jq -r --arg n "$KDK_NAME" '.[]|select(.name==$n)|.url')
           echo "KDK URL: $URL"
-          for i in 1 2 3 4 5 6; do
-            sudo rm -f /tmp/KDK.dmg
-            curl -fL --retry 5 --retry-delay 5 --connect-timeout 60 -o /tmp/KDK.dmg "$URL" || { echo "attempt $i download failed"; sleep 10; continue; }
-            SIZE=$(stat -f%z /tmp/KDK.dmg || echo 0); echo "attempt $i size $SIZE"
-            [ "$SIZE" -gt 600000000 ] || { echo "size too small"; sleep 10; continue; }
-            hdiutil verify /tmp/KDK.dmg || { echo "hdiutil verify failed"; sleep 10; continue; }
-            break
+          for i in 1 2 3; do
+            for BASE in "" "https://ghproxy.net/"; do
+              sudo rm -f /tmp/KDK.dmg
+              curl -fL --retry 3 --retry-delay 5 --connect-timeout 60 --max-time 1200 -o /tmp/KDK.dmg "${BASE}${URL}" || { echo "attempt $i ($BASE) download failed"; sleep 8; continue; }
+              SIZE=$(stat -f%z /tmp/KDK.dmg || echo 0); echo "attempt $i ($BASE) size $SIZE"
+              [ "$SIZE" -gt 600000000 ] || { echo "size too small"; sleep 8; continue; }
+              hdiutil verify /tmp/KDK.dmg || { echo "hdiutil verify failed"; sleep 8; continue; }
+              FOUND=1; break
+            done
+            [ "${FOUND:-0}" = "1" ] && break
+            sleep 10
           done
-          hdiutil attach /tmp/KDK.dmg
+          [ "${FOUND:-0}" = "1" ] || { echo "KDK download failed on all mirrors"; exit 1; }          hdiutil attach /tmp/KDK.dmg
           sudo mkdir -p /Library/Developer/KDKs; sudo chmod 755 /Library/Developer/KDKs
           sudo installer -pkg '/Volumes/Kernel Debug Kit/KernelDebugKit.pkg' -target /
           hdiutil detach '/Volumes/Kernel Debug Kit'
