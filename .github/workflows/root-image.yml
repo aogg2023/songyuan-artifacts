@@ -1,0 +1,133 @@
+name: songyuan-root
+on:
+  workflow_dispatch:
+    inputs:
+      ipsw_url:
+        description: iPhone X iOS 16.5 IPSW
+        default: https://updates.cdn-apple.com/2023SpringFCS/fullrestores/032-85130/6AB0D10A-8AF9-4F6C-8CF5-A1B315CABE88/iPhone10,3,iPhone10,6_16.5_20F66_Restore.ipsw
+      root_size:
+        description: HFS+ image size
+        default: 12G
+      variant:
+        description: optional staging variant (uikitcore-assets)
+        default: ''
+
+jobs:
+  root:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aogg2023/data-a-live
+          ref: main
+
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libfuse3-dev fuse3 hfsprogs rsync \
+            zlib1g-dev libbz2-dev libattr1-dev git unzip wget curl zstd xz-utils python3
+
+      - name: hfsplus module
+        run: |
+          sudo apt-get install -y linux-modules-extra-"$(uname -r)" || sudo apt-get install -y linux-modules-extra-azure || true
+          sudo modprobe hfsplus || true
+          grep hfsplus /proc/filesystems || (echo 'hfsplus still missing' && exit 1)
+
+      - name: apfs-fuse
+        run: |
+          git clone --depth 1 --recursive https://github.com/sgan81/apfs-fuse.git apfs-fuse
+          cd apfs-fuse && mkdir -p build && cd build
+          cmake -DUSE_FUSE3=ON .. >/dev/null && make -s -j"$(nproc)"
+          sudo install -m 755 apfs-fuse apfsutil /usr/local/bin/
+          command -v apfs-fuse
+
+      - name: IPSW
+        run: |
+          curl -L --retry 5 -o ipsw.zip "${{ inputs.ipsw_url }}"
+          ls -l ipsw.zip
+          unzip -o -q ipsw.zip 096-04088-077.dmg 096-04666-078.dmg 096-03536-083.dmg \
+            Firmware/096-04088-077.dmg.trustcache Firmware/096-04666-078.dmg.trustcache \
+            Firmware/096-03536-083.dmg.trustcache \
+            Firmware/all_flash/DeviceTree.d22ap.im4p BuildManifest.plist
+          ls -l *.dmg Firmware/all_flash/DeviceTree.d22ap.im4p
+
+      - name: mkiosroot tools
+        run: |
+          git clone --depth 1 https://github.com/bangprovn/ios-fuxi.git ios-fuxi
+          ls ios-fuxi/tools/mkiosroot.sh
+          sudo chmod +x ios-fuxi/tools/mkiosroot.sh
+          python3 - <<'PY'
+          p = "ios-fuxi/tools/sweet-root-tweaks.py"
+          s = open(p).read()
+          old = "BUILD, VERSION = '20H392', '16.7.16'"
+          new = "BUILD, VERSION = '20F66', '16.5'"
+          if old not in s:
+              raise SystemExit("sweet-root-tweaks.py: expected 20H392/16.7.16")
+          open(p, "w").write(s.replace(old, new, 1))
+          PY
+
+      - name: build the HFS+ root image
+        run: |
+          sudo -E bash ios-fuxi/tools/mkiosroot.sh \
+            096-04088-077.dmg 096-04666-078.dmg 096-03536-083.dmg root.img "${{ inputs.root_size }}"
+          ls -l root.img
+          sudo chown "$(id -u):$(id -g)" root.img
+
+      - name: stage the cryptexes into the root (fuxi-stage-root)
+        run: |
+          sudo mkdir -p /mnt/iosroot
+          sudo mount -t hfsplus -o loop,force root.img /mnt/iosroot
+          sudo python3 ios-fuxi/tools/fuxi-stage-root.py /mnt/iosroot
+          sudo umount /mnt/iosroot
+          sudo chown "$(id -u):$(id -g)" root.img
+
+      - name: SWEET root tweaks (launchd/CommCenter, containers, migration, Setup skip, activation)
+        run: |
+          sudo mkdir -p /mnt/iosroot
+          sudo mount -t hfsplus -o loop,force root.img /mnt/iosroot
+          sudo python3 ios-fuxi/tools/sweet-root-tweaks.py /mnt/iosroot
+          sudo umount /mnt/iosroot
+          sudo fsck.hfsplus -f -y root.img | grep -v 'Illegal name' || true
+          sudo fsck.hfsplus -f -n root.img
+          sudo chown "$(id -u):$(id -g)" root.img
+
+      - name: variant - copy BoundingPath assets into UIKitCore.framework
+        if: inputs.variant == 'uikitcore-assets'
+        run: |
+          sudo mkdir -p /mnt/iosroot
+          sudo mount -t hfsplus -o loop,force root.img /mnt/iosroot
+          SRC=/mnt/iosroot/System/Library/PrivateFrameworks/UIKitCore.framework/BoundingPathData.bundle/Assets.car
+          DST=/mnt/iosroot/System/Library/PrivateFrameworks/UIKitCore.framework/Assets.car
+          sudo test -f "$SRC"
+          sudo cp -a "$SRC" "$DST"
+          ls -l "$DST"
+          sudo umount /mnt/iosroot
+          sudo chown "$(id -u):$(id -g)" root.img
+
+      - name: pinfile (NDK)
+        run: |
+          NDK=$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | tail -1)
+          echo "NDK=$NDK"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          "$TC" --target=aarch64-linux-android31 -static -O2 -Wall -Wextra -Werror \
+            -o pinfile tools/pinfile/pinfile.c
+          sha256sum pinfile
+
+      - name: compress and split
+        run: |
+          zstd -T0 -19 -o root.img.zst root.img
+          rm -f root.img
+          split -b 1500M -d root.img.zst root.img.zst.part.
+          sha256sum root.img.zst.part.* pinfile > SHA256SUMS
+          ls -l root.img.zst.part.* pinfile SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: songyuan-root-image
+          path: |
+            root.img.zst.part.*
+            SHA256SUMS
+            pinfile
+          compression-level: 0
+          if-no-files-found: error
