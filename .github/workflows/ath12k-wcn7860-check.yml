@@ -1,0 +1,71 @@
+name: ath12k-wcn7860-check
+# Syntax-check UniXNU/Ath12kWifi at the sheng-verified commit, after the
+# WCN7860 0039 hardware definition is applied to Linux v7.0.14.
+# This does not build the songyuan kernel.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Check out Ath12kWifi
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/Ath12kWifi
+          ref: f6bf561f92cc42761bdd417fce1d53fe1db9477c
+          path: Ath12kWifi
+
+      - name: Select Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          echo "XC=$XC"
+          sudo xcode-select -s "$XC"
+          clang --version
+          python3 --version
+
+      - name: Fetch Linux v7.0.14 and FreeBSD headers
+        working-directory: Ath12kWifi
+        run: bash tools/fetch-sources.sh
+
+      - name: Apply 0039
+        working-directory: Ath12kWifi
+        run: |
+          git -C deps/linux apply --check "$GITHUB_WORKSPACE/ath12k/0039-wifi-ath12k-add-initial-hardware-definition-for-WCN7.patch"
+          git -C deps/linux apply "$GITHUB_WORKSPACE/ath12k/0039-wifi-ath12k-add-initial-hardware-definition-for-WCN7.patch"
+          echo "---- 110e ----"
+          grep -n "WCN7860_DEVICE_ID" deps/linux/drivers/net/wireless/ath/ath12k/wifi7/pci.c
+          grep -n "wcn7860 hw2.0" deps/linux/drivers/net/wireless/ath/ath12k/wifi7/hw.c
+          grep -n "ATH12K_HW_WCN7860_HW20" deps/linux/drivers/net/wireless/ath/ath12k/core.h deps/linux/drivers/net/wireless/ath/ath12k/wifi7/hal.c
+
+      - name: prepare and syntax check
+        working-directory: Ath12kWifi
+        run: |
+          set +e
+          {
+            echo "Ath12kWifi f6bf561f92cc42761bdd417fce1d53fe1db9477c"
+            clang --version
+            echo "---- prepare ----"
+            bash tools/prepare.sh
+            echo "prepare_exit $?"
+            echo "---- check ----"
+            SUM=1 bash tools/check-ath12k.sh
+            echo "check_exit $?"
+          } > "$GITHUB_WORKSPACE/ath12k-check.txt" 2>&1
+          cat "$GITHUB_WORKSPACE/ath12k-check.txt"
+          prep=$(awk '/^prepare_exit / { print $2 }' "$GITHUB_WORKSPACE/ath12k-check.txt")
+          bad=$(awk -F': ' 'NF==2 && $2+0 != 0 { c++ } END { print c+0 }' "$GITHUB_WORKSPACE/ath12k-check.txt")
+          echo "prepare_exit=$prep nonzero_files=$bad"
+          test "$prep" = "0"
+          test "$bad" = "0"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ath12k-wcn7860-check
+          path: ath12k-check.txt
+          if-no-files-found: warn
