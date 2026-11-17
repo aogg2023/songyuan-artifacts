@@ -55,6 +55,8 @@ jobs:
             echo "---- check ----"
             SUM=1 bash tools/check-ath12k.sh
             echo "check_exit $?"
+            echo "---- debug errors ----"
+            FILES=debug bash tools/check-ath12k.sh | head -40
           } > "$GITHUB_WORKSPACE/ath12k-check.txt" 2>&1
           cat "$GITHUB_WORKSPACE/ath12k-check.txt"
           prep=$(awk '/^prepare_exit / { print $2 }' "$GITHUB_WORKSPACE/ath12k-check.txt")
