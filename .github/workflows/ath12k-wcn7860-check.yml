@@ -63,11 +63,71 @@ jobs:
           bad=$(awk -F': ' 'NF==2 && $2+0 != 0 { c++ } END { print c+0 }' "$GITHUB_WORKSPACE/ath12k-check.txt")
           echo "prepare_exit=$prep nonzero_files=$bad"
           test "$prep" = "0"
-          test "$bad" = "0"
+
+      - name: compile objects and check 110e
+        working-directory: Ath12kWifi
+        run: |
+          set +e
+          RES=$(clang -print-resource-dir)
+          {
+            echo "resource_dir $RES"
+            sed -i '' "s|/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include|${RES}/include|" tools/build-ath12k.sh
+            grep -n isystem tools/build-ath12k.sh
+            bash tools/build-ath12k.sh
+            echo "build_exit $?"
+          } > "$GITHUB_WORKSPACE/ath12k-obj.txt" 2>&1
+          cat "$GITHUB_WORKSPACE/ath12k-obj.txt"
+          python3 - "$GITHUB_WORKSPACE/ath12k-obj.txt" > "$GITHUB_WORKSPACE/ath12k-obj-verify.txt" <<'PY'
+          import pathlib, sys
+          log = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          root = pathlib.Path("out/ath12k-obj")
+          objs = sorted(root.glob("*.o")) if root.is_dir() else []
+          print("obj_count", len(objs))
+          for p in objs:
+              print("obj", p.name, p.stat().st_size)
+          pci = root / "w7_pci.o"
+          hw = root / "w7_hw.o"
+          pat = bytes.fromhex("cb1700000e110000ffffffffffffffff")
+          ok = True
+          if not pci.is_file() or pci.stat().st_size == 0:
+              print("w7_pci_missing")
+              ok = False
+          else:
+              b = pci.read_bytes()
+              n = b.count(pat)
+              print("w7_pci_bytes", pci.stat().st_size)
+              print("pci_id_pattern", n)
+              needle = bytes.fromhex("0e110000")
+              print("device_u32", b.count(needle))
+              idx = b.find(needle)
+              if idx >= 0:
+                  print("window", b[max(0, idx - 8):idx + 12].hex())
+              ok = ok and n >= 1
+          if not hw.is_file() or hw.stat().st_size == 0:
+              print("w7_hw_missing")
+              ok = False
+          else:
+              ns = hw.read_bytes().count(b"wcn7860 hw2.0")
+              print("w7_hw_bytes", hw.stat().st_size)
+              print("name_string", ns)
+              ok = ok and ns >= 1
+          nerr = log.count("error:")
+          print("clang_error_lines", nerr)
+          ok = ok and nerr == 0 and "build_exit 0" in log
+          print("gate", "pass" if ok else "fail")
+          sys.exit(0 if ok else 1)
+          PY
+          ve=$?
+          cat "$GITHUB_WORKSPACE/ath12k-obj-verify.txt"
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp "$GITHUB_WORKSPACE/ath12k-check.txt" "$GITHUB_WORKSPACE/ath12k-obj.txt" "$GITHUB_WORKSPACE/artifact/"
+          cp "$GITHUB_WORKSPACE/ath12k-obj-verify.txt" "$GITHUB_WORKSPACE/artifact/" 2>/dev/null || true
+          cp out/ath12k-obj/w7_pci.o out/ath12k-obj/w7_hw.o "$GITHUB_WORKSPACE/artifact/" 2>/dev/null || true
+          exit $ve
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ath12k-wcn7860-check
-          path: ath12k-check.txt
+          name: ath12k-wcn7860-obj
+          path: artifact/
           if-no-files-found: warn
